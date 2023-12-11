@@ -5,6 +5,7 @@ from cairosvg import svg2png
 import cv2
 import chess
 import chess.svg
+from numpy.linalg import norm
 
 pieces_name_RGB = {
     'white-pawn':   ( 77, 255,  77), #(  0, 179,   0)
@@ -73,13 +74,97 @@ def show_bord_FEN(FEN='rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
     cv_img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGBA2BGRA)
     cv2.imshow('board', cv_img)
 
-def draw_corners(img, corners, color=(255, 0, 0), radius=20):
-    for i in range(0,int(len(corners)),2):
-            img = cv2.circle(img, (int(corners[i]*img.shape[0]), int(corners[i+1]*img.shape[1])), radius=radius, color=color, thickness=-1)
-    return img
 
 def draw_bbox(img, bbox, color=(0, 255, 0), thickness=10):
     img = cv2.rectangle(img, color=color, thickness=thickness,
                     pt1=(int((bbox[0]-bbox[2]/2)*img.shape[0]), int((bbox[1]-bbox[3]/2)*img.shape[1])),
                     pt2=(int((bbox[0]+bbox[2]/2)*img.shape[0]), int((bbox[1]+bbox[3]/2)*img.shape[1])))
     return img
+
+
+def detect_pieces(result):
+    x, y, c = [], [], []
+    for r in result:
+        boxes = r.boxes
+        for box in boxes:
+            c.append(int(box.cls.cpu().numpy()))
+
+            b = box.xywh[0].cpu().numpy()
+            x.append(int(b[0]))
+            y.append(int(b[1]+b[3]*5/16))
+
+    return np.array([x, y, c]).T
+
+
+def detect_corner(result_of_prediction):
+
+    dict_pieces_position = {1:  [],
+                            5:  [],
+                            7:  [],
+                            11: [],}
+
+
+    dict_corner = {}
+
+
+
+
+    for r in result_of_prediction:
+        boxes = r.boxes
+        for box in boxes:
+            
+            b = box.xywh[0].cpu().numpy()
+            c = int(box.cls.cpu().numpy())
+
+            x, y = int(b[0]), int(b[1]+b[3]*2.75/8)
+
+            if c in dict_pieces_position:
+                dict_pieces_position[c].append(np.array([x, y]))
+
+    l1 = norm(dict_pieces_position[1][0] - dict_pieces_position[5][0])
+    l2 = norm(dict_pieces_position[1][1] - dict_pieces_position[5][0])
+
+    if l1 > l2:
+        dict_corner['BL'] = dict_pieces_position[1][0]
+        dict_corner['BR'] = dict_pieces_position[1][1]
+    else:
+        dict_corner['BL'] = dict_pieces_position[1][1]
+        dict_corner['BR'] = dict_pieces_position[1][0]    
+
+
+    l1 = norm(dict_pieces_position[7][0] - dict_pieces_position[11][0])
+    l2 = norm(dict_pieces_position[7][1] - dict_pieces_position[11][0])
+
+    if l1 > l2:
+        dict_corner['TL'] = dict_pieces_position[7][0]
+        dict_corner['TR'] = dict_pieces_position[7][1]
+    else:
+        dict_corner['TL'] = dict_pieces_position[7][1]
+        dict_corner['TR'] = dict_pieces_position[7][0]   
+
+
+    ans = np.array(
+    [dict_corner['BR'],
+     dict_corner['TR'], 
+     dict_corner['TL'], 
+     dict_corner['BL']],
+    dtype=np.float32)
+    return ans
+
+
+def get_matrix_transform(src, image_size):
+    w, h = image_shape
+    dst =  np.array([[15/16*w, 15/16*h],
+                     [15/16*w, 1/16*h], 
+                     [ 1/16*w, 1/16*h], 
+                     [ 1/16*w, 15/16*h]], dtype=np.float32)
+    M = cv2.getPerspectiveTransform(src, dst)
+    return M
+
+
+def coord_transform(x, y, c, M):
+    new_xy = M @ np.array([x, y, 1])
+    new_xy = new_xy / new_xy[2]
+    new_xy[2] = c
+    return new_xy
+
